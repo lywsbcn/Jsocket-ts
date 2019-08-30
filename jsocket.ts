@@ -301,11 +301,11 @@
          * @param data
          */
         addRecordResponse: function (action, data) {
-            for (var x in this.record.filter) {
-                if (this.record.filter[x] == action) return;
+            for (var x in this.filter) {
+                if (this.filter[x] == action) return;
             }
 
-            this.record.response = data;
+            this.response = data;
         }
     }
 
