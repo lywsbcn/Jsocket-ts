@@ -1,339 +1,785 @@
-﻿
-class Jsocket implements JsocketInterface, JsDataSourceInterface {
+﻿class Jsocket {
 
-
-    private static _instant: Jsocket;
-    public static instant() {
-        if (!this._instant) {
-            this._instant = new Jsocket();
+    private static _instance: Jsocket = null;
+    public static get instance() {
+        if (!this._instance) {
+            this._instance = new Jsocket();
         }
-        return this._instant;
+        return this._instance;
     }
 
-    ws: WebSocket;
 
-    wsUrl: string;
-
-    log: JslogInterface;
-
-    conn: JsconnInterface;
-
-    event: JsEventMInterface;
-
-    constructor() {
-        this.log = new JsocketLog();
-        this.conn = new JsocketConn();
-        this.event = new JsocketEvent();
+    /**
+     * Jsocket 控制台,日志接口定义
+     * */
+    public log = {
+        /**
+        * 是否 显示日志
+        * */
+        showLog: true,
+        /**
+         * 服务器标签
+         * 日志输出时,在前面显示
+         * */
+        TAG: "",
+        /**
+         * 打印日志
+         */
+        log: (data: any) => {
+            if (!this.log.showLog) return;
+            console.log(this.log.TAG, data);
+        },
+        /**
+         * 如果showLog == true
+         * 回复时, 这些action 值不输出
+         * */
+        responseFilter: [],
+        /**
+         * 如果showLog == true
+         * 请求时 这些action 值不输出
+         * */
+        requestFilter: [],
+        /**
+         * 添加请求日志过滤action
+         * @param a
+         */
+        addRequest: function (...a) {
+            for (var x in a) {
+                this.requestFilter.push(a[x]);
+            }
+        },
+        /**
+         * 添加回复日志过滤action
+         * @param a
+         */
+        addResponse: function (...a) {
+            for (var x in a) {
+                this.responseFilter.push(a[x]);
+            }
+        },
+        /**
+         * 同时添加请求,回复action
+         * @param a
+         */
+        addFilter: function (...a) {
+            this.addRequest(...a);
+            this.addResponse(...a);
+        }
     }
 
-    setWsUrl(host: string, port?: number, upgroup?: boolean): void {
+    /**
+    * websocket 对象
+    * */
+    private ws: WebSocket = null;
 
-        var protocol = upgroup ? "wss://" : "ws://";
+    /**
+     * websocket 连接地址
+     * */
+    public url = "";
 
-        this.wsUrl = protocol + host;
+    /**
+     * 设置连接地址
+     * @param host  域名
+     * @param port  端口
+     * @param upgroup 协议
+     */
+    public setUrl(host: string, port: string | number, secret = false) {
+        let protocol = secret ? "wss://" : "ws://";
+        this.url = protocol + host;
         if (port !== void 0) {
-            this.wsUrl += ":" + port;
+            this.url += ":" + port;
         }
     }
 
-    open(url?: string): void {
-        this.conn.userClose = false;
+    /**
+     * 打开websocket 连接
+     * @param url
+     */
+    public open(url?: string) {
 
-        this.wsUrl = url === void 0 ? this.wsUrl : url;
+        if (url !== void 0) this.url = url;
 
-        if (this.log.showLog) {
-            console.log(this.log.TAG, this.wsUrl);
-        }
-
-        if (this.wsUrl.length == 0) {
-            console.error(this.log.TAG, "websocket url 错误");
+        this.log.log(this.url);
+        if (this.url.length == 0) {
+            this.log.log("websocket url 错误");
             return;
         }
 
-        if (this.ws && this.ws.readyState == WebSocket.OPEN) {
-            this.ws.close();
-        }
+        this.close(false);
 
-        this.ws = new WebSocket(this.wsUrl);
-
-        if (this.ws) {
-
-            this.ws.onopen = (evt) => {
-                this.wsDidOpen(evt);
-            }
-
-            this.ws.onclose = (evt) => {
-                this.wsDidClose(evt);
-            }
-
-            this.ws.onerror = (evt) => {
-                this.wsDidError(evt);
-            }
-
-            this.ws.onmessage = (evt) => {
-                this.wsDidMessage(evt);
-            }
-        }
+        this.ws = new WebSocket(this.url);
+        this.ws.onopen = this.wsDidOpen;
+        this.ws.onclose = this.wsDidClose;
+        this.ws.onerror = this.wsDidError;
+        this.ws.onmessage = this.wsDidMessage;
 
     }
 
-    close(userClose?: boolean): void {
-        userClose = userClose === void 0 ? true : userClose;
-        if (userClose) {
-            this.conn.userClose = true;
-        }
-
-        clearInterval(this.hbTimer);
-        if (this.ws && this.ws.readyState == WebSocket.OPEN) {
-            this.ws.close();
-        }
+    /**
+     * 关闭websocket连接
+     * */
+    public close(outer = true) {
+        this.conn.userClose = outer;
+        this.conn.stop();
+        this.heartbeat.stop();
 
         if (this.ws) {
+
+            this.ws.readyState == WebSocket.OPEN && this.ws.close();
             this.ws.onclose = null;
             this.ws.onopen = null;
             this.ws.onerror = null;
             this.ws.onmessage = null;
             this.ws = null;
+
         }
+
 
     }
 
+    /**websocket 连接成功回调*/
+    private wsDidOpen = (evt) => {
+        this.log.log('连接成功');
 
+        this.conn.reset();
 
-    send(taget: any, param: object, callback: (response: any, flag?: number, msg?: string, jsocket?: JsocketInterface) => void, always?: boolean, isLoading: boolean = true): void {
-
-        var action = param[this.event.KGroup];
-        this.addRecordRequst(action, param);
-
-        var request = JSON.stringify(param);
-
-        if (this.log.showLog && !this.inArray(this.log.requestFilter, action)) {
-            console.log(this.log.TAG + " 发送数据", request);
+        for (var x in this.event.connect) {
+            let jsc = this.event.connect[x];
+            if (typeof (jsc.block) === 'function') {
+                jsc.block(this);
+            }
+        }
+    }
+    /**连接关闭回调*/
+    private wsDidClose = (evt) => {
+        this.log.log('连接关闭');
+        for (var x in this.event.close) {
+            let jsc = this.event.close[x];
+            if (typeof (jsc.block) === 'function') {
+                jsc.block(this);
+            }
         }
 
-
-        let assign = param[this.event.KAssign] || null;
-
-        //如果,taget==null,false... 表示不添加回调
-        if (!assign && taget) {
-            this.event.ListenerAor(action, taget, callback, always, isLoading);
+        this.conn.reconnect();
+    }
+    /**连接错误回调*/
+    private wsDidError = (evt) => {
+        this.log.log('连接错误');
+        for (var x in this.event.error) {
+            let jsc = this.event.error[x];
+            if (typeof (jsc.block) === 'function') {
+                jsc.block(this);
+            }
         }
+
+        this.conn.reconnect();
+    }
+    /**连接收到消息回调*/
+    private wsDidMessage = (evt) => {
+        var data;
+        try {
+            data = JSON.parse(evt.data);
+        } catch (e) {
+            this.log.log("收到不是json的数据:" + evt.data);
+            this.stopLoading();
+            return;
+        }
+
+        let action = data[this.event.Kaction];
+        if (!this.inArray(this.log.responseFilter, action)) {
+            this.log.log('收到消息 ' + evt.data);
+        }
+
+        if (action == 0) this.stopLoading();
+
+        this.record.addRecordResponse(action, data);
+
+        var flag = data[this.event.Kflag];
+        var msg = data[this.event.Kmsg];
+
+        let assign = data[this.event.Kwhat];
+        if (assign) {
+            let jsc = this.event.assign[assign];
+            if (!jsc) return;
+            if (jsc.loading) this.stopLoading();
+            jsc.block(data, flag, msg, this);
+            return;
+        }
+
+        let events = this.event.callback[action];
+        if (events) {
+            for (var i = 0; i < events.length; i++) {
+                let jsc = events[i];
+                if (jsc.loading) this.stopLoading();
+                jsc.block(data, flag, msg, this);
+                events.splice(i, 1);
+                break;
+            }
+        }
+
+        let list = this.event.listener[action];
+
+        if (list) {
+            for (var x in list) {
+                let jsc = list[x];
+                jsc.block(data, flag, msg, this);
+            }
+        }
+
+    }
+    /**
+     * 发送请求
+     * @param taget ==null 表示不添加回调
+     * @param param 请求的参数
+     * @param callback  回调
+     * @param isLoading 是否显示loading 默认 true
+     */
+    public send(target: any, param: any, callback: Function, loading = true) {
+
+        let action = param[this.event.Kaction];
+        this.record.addRecordRequst(action, param);
+
+        let request = JSON.stringify(param);
+
+        if (!this.inArray(this.log.requestFilter, action)) {
+            this.log.log("发送数据 " + request);
+        }
+
+        let assign = param[this.event.Kwhat] || null;
 
         if (assign) {
-            this.event.AssignAppend(assign, taget, callback, isLoading);
+            this.addAssign(assign, target, callback, loading);
+        } else {
+            this.addCallback(action, target, callback, loading);
         }
 
         if (this.ws && this.ws.readyState == WebSocket.OPEN) {
             this.ws.send(request);
         }
 
+        loading && this.startLoading();
 
-        if (isLoading) this.startLoading();
     }
 
-    listener(action: string | number, target: any, param: object, callback: (response: any, flag?: number, msg?: string, jsocket?: JsocketInterface) => void) {
-        this.event.ListenerAor(action, target, callback, true, false);
-    }
-
-
-    /*-------------监听---------------*/
-
-    private wsDidOpen(evt) {
-
-        if (this.log.showLog) {
-            console.log(this.log.TAG, "连接成功");
-        }
-
-        for (var i = 0; i < this.event.Connected.length; i++) {
-            var ev = this.event.Connected[i];
-            if (ev.block) {
-                ev.block(this)
+    /**
+     * 报文缓存配置
+     * 记住最后一次请求和回复的报文
+     */
+    public record = {
+        response: null,
+        request: null,
+        filter: [],
+        /**
+         * 添加过滤器,被添加到过滤器中的action不会被记录
+         * @param action
+         */
+        addRecordFilter: function (action) {
+            for (var x in this.filter) {
+                if (this.filter[x] == action) return;
             }
-        }
 
+            this.filter.push(action);
+        },
+        /**
+         * 保存请求记录
+         * @param action
+         * @param data
+         */
+        addRecordRequst: function (action, data) {
 
-        //连接打开,自动握手
-        if (typeof (this.hsPacket) === "function") {
-
-            this.send("jsocket_handshake", this.hsPacket(), (response: any, flag?: number, msg?: string) => {
-                this.wsDidHandshake(response, flag, msg);
-            }, true);
-        }
-    }
-
-    private wsDidError(evt) {
-        if (this.log.showLog) {
-            console.log(this.log.TAG, "连接错误")
-        }
-
-        for (var i = 0; i < this.event.Errored.length; i++) {
-            var ev = this.event.Errored[i];
-            if (ev.block) {
-                ev.block(this)
+            for (var x in this.filter) {
+                if (this.filter[x] == action) return;
             }
-        }
 
-        this.reConnect();
-    }
+            this.response = null;
+            this.request = data;
 
-    private wsDidClose(evt) {
-        if (this.log.showLog) {
-            console.log(this.log.TAG, "连接关闭")
-        }
-
-        for (var i = 0; i < this.event.Closed.length; i++) {
-            var ev = this.event.Closed[i];
-            if (ev.block) {
-                ev.block(this)
+        },
+        /**
+         * 保存回复记录
+         * @param action
+         * @param data
+         */
+        addRecordResponse: function (action, data) {
+            for (var x in this.record.filter) {
+                if (this.record.filter[x] == action) return;
             }
-        }
 
-        this.reConnect();
-    }
-
-    private wsDidHandshake(response: any, flag: number, msg: string) {
-        for (var i = 0; i < this.event.Handshaked.length; i++) {
-            var jsc = this.event.Handshaked[i];
-
-            jsc.block(response, flag, msg, this);
+            this.record.response = data;
         }
     }
 
+    /**
+     * 事件管理
+     * */
+    public event = {
+        Kaction: "action",
+        Kflag: "flag",
+        Kmsg: "msg",
+        Kwhat: "cdata",
+        //连接成功回调列表
+        connect: <Array<{ target: any, block: Function }>>[],
+        //连接关闭回调列表
+        close: <Array<{ target: any, block: Function }>>[],
+        //连接错误回调列表
+        error: <Array<{ target: any, block: Function }>>[],
+        //监听回调列表
+        listener: <{ [k: string]: Array<{ target: any, block: Function }> }>{},
+        //回调列表
+        callback: <{ [k: string]: Array<{ target: any, block: Function, loading: boolean }> }>{},
+        //指定回调列表
+        assign: <{ [k: string]: { target: any, block: Function, loading: boolean } }>{},
+    }
 
+    /**移除所有回调事件,所有监听事件 */
+    public removeAll(target?: any) {
 
-    private wsDidMessage(evt) {
+        this.removeConnect(target);
+        this.removeClose(target);
+        this.removeError(target);
+        this.removeAllListener(target);
+        this.removeAllCallback(target);
+        this.removeAssign(target);
 
-        var data;
-        try {
-            data = JSON.parse(evt.data);
-        } catch (e) {
-            console.log(this.log.TAG, "收到不是json的数据:" + evt.data);
-            this.stopLoading();
+    }
+
+    /**
+     * 添加actio 监听
+     * @param action
+     * @param target
+     * @param callback
+     */
+    public addListener(action: string | number, target: any, callback: Function) {
+        if (!target || typeof (callback) !== 'function') return;
+
+        let list = this.event.listener[action] || [];
+        this.event.listener[action] = list;
+
+        let i = list.length;
+
+        while (i--) {
+            let jsc = list[i];
+
+            if (callback == jsc.block) return;
+        }
+
+        list.push({ target: target, block: callback })
+
+    }
+
+    /**
+     * 移除指定action的监听
+     * @param action
+     * @param target
+     * @param callback
+     */
+    public removeListener(action: string | number, target?: any, callback?: Function) {
+        if (this.event.listener[action] === void 0) return;
+
+        if (!target && !callback) {
+            this.event.listener[action] = [];
             return;
         }
 
-        var action = data[this.event.KGroup];
+        let list = this.event.listener[action];
+        let i = list.length;
 
-        if (this.log.showLog && !this.inArray(this.log.responseFilter, action)) {
+        while (i--) {
 
-            console.log(this.log.TAG + " 收到消息", evt.data);
+            let jsc = list[i];
+
+            if (callback && jsc.block == callback) {
+                list.splice(i, 1);
+                break;
+            }
+
+            if (!callback && jsc.target == target) {
+                list.splice(i, 1);
+            }
+
+        }
+    }
+    /**
+     * 移除所有监听,当taget|callback false 时移除所有监听
+     * @param target
+     * @param callback
+     */
+    public removeAllListener(target?: any, callback?: Function) {
+        if (!target && !callback) {
+            this.event.listener = {};
+            return;
         }
 
-        this.addRecordResponse(action, data);
+        for (var x in this.event.listener) {
 
-        var assign = data[this.event.KAssign];
+            this.removeListener(x, target, callback);
+        }
 
-        if (!assign) {
-            /* callback 监听,开始执行回调时,一个请求回复只执行一次
-             * 而且肯定删除
-             * 如果 想要同时监听,设置 always==true 
-             */
-            var eventModel = this.event.Callback[action];
+    }
 
-            if (eventModel) {
-                for (var i = 0; i < eventModel.length; i++) {
-                    var jsc = eventModel[i];
-                    if (jsc.isLoading) this.stopLoading();
 
-                    var flag = data[this.event.KFlag];
-                    var msg = data[this.event.KMsg];
+    /**
+     * 添加回调
+     * @param action
+     * @param target
+     * @param callback
+     * @param loading
+     */
+    public addCallback(action: string | number, target: any, callback: Function, loading: boolean) {
+        if (!target || typeof (callback) === void 0) return;
 
-                    jsc.block(data, flag, msg, this);
-                    eventModel.splice(i, 1);
+        let list = this.event.callback[action] || [];
+        this.event.callback[action] = list;
+
+        let i = list.length;
+
+        while (i--) {
+            let jsc = list[i];
+
+            if (callback == jsc.block) return;
+        }
+
+        list.push({ target: target, block: callback, loading: loading })
+    }
+
+    /**
+     * 移除指定的回调
+     * @param action
+     * @param target
+     * @param callback
+     */
+    public removeCallback(action: string | number, target?: any, callback?: Function) {
+        if (this.event.callback[action] === void 0) return;
+
+
+        if (!target && !callback) {
+            this.event.callback[action] = [];
+            return;
+        }
+
+        let list = this.event.callback[action];
+        let i = list.length;
+
+        while (i--) {
+
+            let jsc = list[i];
+
+            if (callback && jsc.block == callback) {
+                list.splice(i, 1);
+                break;
+            }
+
+            if (!callback && jsc.target == target) {
+                list.splice(i, 1);
+            }
+
+        }
+    }
+    /**
+     * 移除所有回调,当taget|callback false 时移除所有回调
+     * @param target
+     * @param callback
+     */
+    public removeAllCallback(target?: any, callback?: Function) {
+
+        if (!target && !callback) {
+            this.event.callback = {};
+            return;
+        }
+
+        for (var x in this.event.callback) {
+            this.removeCallback(x, target, callback);
+        }
+
+    }
+
+    /**
+     * 添加指定的回调
+     * @param what
+     * @param targt
+     * @param callback
+     * @param loading
+     */
+    public addAssign(what: any, targt: any, callback: Function, loading: boolean) {
+        if (!what) return;
+        this.event.assign[what] = {
+            target: targt,
+            block: callback,
+            loading: loading
+        }
+    }
+
+    /**
+     * 移除指定的回调
+     * @param what
+     * @param target
+     * @param callback
+     */
+    public removeAssign(what: any, target?: any, callback?: Function) {
+
+        if (what) delete this.event.assign[what];
+
+        for (var x in this.event.assign) {
+            let jsc = this.event.assign[x];
+
+            if (callback && callback == jsc.block) {
+                delete this.event.assign[x];
+                break;
+            }
+
+            if (!callback && jsc.target == target) {
+                delete this.event.assign[x];
+            }
+        }
+
+    }
+
+    /**移除所有指定的回调 */
+    public removeAllAssign() {
+        this.event.assign = {};
+    }
+
+    /**
+     * 添加连接成功的监听
+     * @param target
+     * @param callback
+     */
+    public addConnect(target: any, callback: Function) {
+        if (!target || typeof (callback) !== 'function') return;
+
+        let i = this.event.connect.length;
+        while (i--) {
+
+            let jsc = this.event.connect[i];
+
+            if (callback == jsc.block) return;
+        }
+
+        this.event.connect.push({ target: target, block: callback });
+
+        if (this.ws && this.ws.readyState == WebSocket.OPEN) {
+            callback(this);
+        }
+    }
+    /**
+     * 移除连接成功的监听
+     * @param target
+     * @param callback
+     */
+    public removeConnect(target?: any, callback?: Function) {
+
+        if (!target && !callback) {
+            this.event.connect = [];
+            return;
+        }
+
+        let i = this.event.connect.length;
+
+        while (i--) {
+
+            let jsc = this.event.connect[i];
+
+            if (callback && jsc.block == callback) {
+                this.event.connect.splice(i, 1);
+                break;
+            }
+
+            if (!callback && jsc.target == target) {
+                this.event.connect.splice(i, 1);
+            }
+
+        }
+    }
+
+    /**
+     * 添加连接关闭的监听
+     * @param target
+     * @param callback
+     */
+    public addClose(target: any, callback: Function) {
+        if (!target || typeof (callback) !== 'function') return;
+        let i = this.event.close.length;
+        while (i--) {
+
+            let jsc = this.event.close[i];
+
+            if (callback == jsc.block) return;
+        }
+
+        this.event.close.push({ target: target, block: callback });
+    }
+    /**
+     * 移除连接关闭的监听
+     * @param target
+     * @param callback
+     */
+    public removeClose(target: any, callback?: Function) {
+
+        if (!target && !callback) {
+            this.event.close = [];
+            return;
+        }
+
+        let i = this.event.close.length;
+
+        while (i--) {
+
+            let jsc = this.event.close[i];
+
+            if (callback && jsc.block == callback) {
+                this.event.close.splice(i, 1);
+                break;
+            }
+
+            if (!callback && jsc.target == target) {
+                this.event.close.splice(i, 1);
+            }
+        }
+    }
+    /**
+     * 添加连接错误的监听
+     * @param target
+     * @param callback
+     */
+    public addError(target: any, callback: Function) {
+        if (!target || typeof (callback) !== 'function') return;
+        let i = this.event.error.length;
+        while (i--) {
+
+            let jsc = this.event.error[i];
+
+            if (callback == jsc.block) return;
+        }
+
+        this.event.error.push({ target: target, block: callback });
+
+    }
+    /**
+     * 移除连接错误的监听
+     * @param target
+     * @param callback
+     */
+    public removeError(target: any, callback?: Function) {
+
+        if (!target && !callback) {
+            this.event.error = [];
+            return;
+        }
+
+        let i = this.event.error.length;
+
+        while (i--) {
+
+            let jsc = this.event.error[i];
+
+            if (callback && jsc.block == callback) {
+                this.event.error.splice(i, 1);
+                break;
+            }
+
+            if (!callback && jsc.target == target) {
+                this.event.error.splice(i, 1);
+            }
+        }
+    }
+
+    /**心跳配置*/
+    public heartbeat = {
+        /**心跳定时器*/
+        timer: 0,
+        /**心跳间隔时间*/
+        interval: 10000,
+        /**心跳数据源*/
+        block: null,
+        /**开始心跳*/
+        start: (block?: Function) => {
+            this.heartbeat.block = block;
+            if (this.heartbeat.timer) return;
+            if (typeof (this.heartbeat.block) !== 'function') return;
+            this.heartbeat.timer = setInterval(() => {
+                this.send(null, this.heartbeat.block(this), null, false);
+            }, this.heartbeat.interval)
+        },
+        /**停止心跳*/
+        stop: () => {
+            clearInterval(this.heartbeat.timer);
+        }
+    }
+
+    /*重连相关*/
+    private conn = {
+        /**是否重连*/
+        reConn: true,
+        /**记录是否为用户主动关闭的连接,如果为用户关闭的不重连*/
+        userClose: false,
+        /**当前重连次数,连接成功是重置该值*/
+        number: 0,
+        /**最大重连次数,==0时,无限重连*/
+        maxNumber: 10,
+        /**重连间隔时间*/
+        interval: 10000,
+        /*最大的重连间隔时间*/
+        intervalMax: 60000,
+        /*最小重连时间*/
+        intervalMin: 1000,
+        /**重连模式,==1是,每次重连的间隔时间时上一次的2倍*/
+        pattern: 0,
+        /**重连定时器*/
+        timer: 0,
+        /*设置最大重连时间*/
+        setIntervalMax: function (num) {
+            this.intervalMax = num < this.intervalMin ? this.intervalMin : num;
+        },
+        /**
+         * 设置重连模式
+         * @param pattern
+         */
+        setPattern: function (pattern) {
+            this.pattern = pattern;
+            if (pattern == 1) {
+                this.interval = this.intervalMin;
+            }
+        },
+        /**设置最新重连时间*/
+        setIntervalMin: function (num){
+            if (num < this.intervalMin) num = 2;
+            if (num > this.intervalMax) {
+                this.intervalMax = num;
+            }
+            this.intervalMin = num;
+        },
+        /**开始重连*/
+        reconnect: () => {
+            if (!this.conn.reConn) return;
+            if (this.conn.userClose) return;
+            if (this.conn.number > this.conn.maxNumber && this.conn.maxNumber > 0) return;
+
+            this.conn.number++;
+            switch (this.conn.pattern) {
+                case 1:
+                    this.conn.interval *= 2;
                     break;
-                }
             }
 
+            this.conn.timer = setTimeout(() => {
+                this.open();
+            }, this.conn.interval);
 
-            //回调 但不移除
-            eventModel = this.event.Listener[action];
-            if (eventModel) {
-
-                for (var i = 0; i < eventModel.length; i++) {
-                    var jsc = eventModel[i];
-                    if (jsc.isLoading) this.stopLoading();
-
-                    var flag = data[this.event.KFlag];
-                    var msg = data[this.event.KMsg];
-
-                    jsc.block(data, flag, msg, this);
-                }
+            if (this.conn.interval > this.conn.intervalMax) {
+                this.conn.interval = this.conn.intervalMin;
             }
 
-        } else {
-
-            let jsc = this.event.Assign[assign];
-            if (jsc.isLoading) this.stopLoading();
-            jsc.block(data, flag, msg, this);
-
-            this.event.AssignRemove(assign);
-
+        },
+        /**重置重连参数 */
+        reset: function () {
+            this.number = 0;
+        },
+        /**停止重连 */
+        stop: function () {
+            if (this.userClose) clearTimeout(this.timer);
         }
-
-        if (action == 0) this.stopLoading();
     }
 
-
-
-    /*------------数据源---------------*/
-    hbInterval: number = 10000;
-
-    hbTimer: number;
-
-    hbPacket: () => object;
-
-    setHbPacket(packet: () => object): void {
-        this.hbPacket = packet;
-
-        if (this.hbTimer) return;
-        this.hbTimer = setInterval(() => {
-            this.send(null, this.hbPacket(), null, false, false);
-        }, this.hbInterval);
-    }
-
-    hsPacket: () => object;
-
-
-    /**重连 */
-    private reConnect() {
-        this.close(false);
-
-        //超过连接次数
-        //最大连接次数为0 不限制
-        if (!this.conn.isReConn) return;
-        if (this.conn.userClose) return;
-        if (this.conn.currNumber > this.conn.number && this.conn.number > 0) return;
-
-        this.conn.currNumber++;
-
-
-        switch (this.conn.pattern) {
-            case JsocketConn.Pattern_Normal:
-                break;
-            case JsocketConn.Pattern_Double:
-                this.conn.interval *= 2;
-                break;
-        }
-
-        this.conn.timer = setTimeout(() => {
-            this.open();
-        }, this.conn.interval)
-
-        if (this.conn.interval > this.conn.intervalMax) {
-            this.conn.interval = this.conn.intervalMin;
-        }
-
-    }
-
-
-    private inArray(array: Array<any>, value: any): boolean {
-        for (var i = 0; i < array.length; i++) {
-            if (array[i] == value) {
-                return true;
-            }
-        }
-        return false;
-    }
 
     private loadingTimer;
     private startLoading() {
@@ -359,338 +805,13 @@ class Jsocket implements JsocketInterface, JsDataSourceInterface {
         }, 500)
     }
 
-    record = {
-        filter: [],
-        request: null,
-        response: null
-    }
-    addRecordFilter(action) {
-        for (var x in this.record.filter) {
-            if (this.record.filter[x] == action) return;
-        }
-
-        this.record.filter.push(action);
-    }
-
-    addRecordRequst(action, data) {
-
-        for (var x in this.record.filter) {
-            if (this.record.filter[x] == action) return;
-        }
-
-        this.record.response = null;
-        this.record.request = data;
-
-    }
-
-    addRecordResponse(action, data) {
-        for (var x in this.record.filter) {
-            if (this.record.filter[x] == action) return;
-        }
-
-        this.record.response = data;
-    }
-
-}
-
-
-
-
-class JsocketLog implements JslogInterface {
-
-    TAG: string = "";
-
-    showLog: boolean = true;
-
-    requestFilter: (string | number)[] = [];
-
-    responseFilter: (string | number)[] = [];
-
-    addRequestFilter(...a) {
-        for (var x in a) {
-            this.requestFilter.push(a[x]);
-        }
-    }
-
-    addResponseFilter(...a) {
-        for (var x in a) {
-            this.responseFilter.push(a[x]);
-        }
-    }
-
-    addFilter(...a) {
-        this.addRequestFilter(...a);
-        this.addResponseFilter(...a);
-    }
-
-}
-
-
-class JsocketConn implements JsconnInterface {
-
-    public static Pattern_Normal = 0;
-    public static Pattern_Double = 1;
-
-    userClose: boolean = false;
-
-    isReConn: boolean = true;
-
-    pattern: number = JsocketConn.Pattern_Normal;
-
-    setPattern(type: number): void {
-
-        this.pattern = type;
-        if (type == 1) {
-            this.interval = this.intervalMin;
-        }
-
-    }
-
-    number: number = 10;
-
-    currNumber: number = 0;
-
-    interval: number = 10000;
-
-    intervalMax: number = 60000;
-
-    setIntervalMax(num: number): void {
-
-        this.intervalMax = num < this.intervalMin ? this.intervalMin : num;
-
-    }
-
-    intervalMin: number = 1000;
-
-    setIntervalMix(num: number): void {
-
-        if (num < this.intervalMin) {
-            num = 2;
-        }
-
-        if (num > this.intervalMax) {
-            this.intervalMax = num;
-        }
-
-        this.intervalMin = num
-
-    }
-
-
-    timer: number;
-
-}
-
-class JsocketEvent implements JsEventMInterface {
-
-    /**
-     * 添加事件
-     * 当 jscm.block判断为false时
-     * 移除所有 jscm.taget的监听
-     * 
-     * 同一个 target 允许添加多个回调,但是callback必须不同
-     * 否则 替换
-     * 
-     * @param jscm 回调模型
-     * @param array 回调容器
-     */
-    private EventAor(jscm: JscInterface, array: JscInterface[]) {
-
-        if (!jscm.target) return;
-
-        if (!jscm.block) {
-            var i = array.length;
-
-            while (i--) {
-                var jsc = array[i];
-                if (jsc.target == jscm.target) {
-                    array.splice(i, 1);
-                }
-            }
-
-            return;
-        }
-
+    private inArray(array: Array<any>, value: any): boolean {
         for (var i = 0; i < array.length; i++) {
-            var jsc = array[i];
-            if (jsc.target == jscm.target && jsc.block == jscm.block) {
-                //array.splice(i, 1, jscm);
-                return;
+            if (array[i] == value) {
+                return true;
             }
         }
-
-        array.push(jscm);
-
+        return false;
     }
-
-    compareWhat: boolean = false;
-
-    Connected: JsEventCallback[] = [];
-
-    ConnectAor(target: any, callback?: (jsocket?: JsocketInterface) => void): void {
-
-        var jscm: JsEventCallback = {
-            always: true,
-            target: target,
-            block: callback
-        }
-
-        this.EventAor(jscm, this.Connected)
-
-
-    }
-    Handshaked: JscInterface[] = [];
-
-    HandshakeAor(target: any, callback?: (response: any, flag?: number, msg?: string, jsocket?: JsocketInterface) => void, always?: boolean): void {
-
-        var jscm: JscInterface = {
-            always: always === void 0 ? true : always,
-            target: target,
-            block: callback
-        }
-
-        this.EventAor(jscm, this.Handshaked);
-    }
-
-    Errored: JsEventCallback[] = [];
-
-    ErrorAor(target: any, callback?: (jsocket?: JsocketInterface) => void): void {
-
-        var jscm: JsEventCallback = {
-            always: true,
-            target: target,
-            block: callback
-        }
-
-        this.EventAor(jscm, this.Errored);
-    }
-
-    Closed: JsEventCallback[] = [];
-
-    CloseAor(target: any, callback?: (jsocket?: JsocketInterface) => void): void {
-
-        var jscm: JsEventCallback = {
-            always: true,
-            target: target,
-            block: callback
-        }
-
-        this.EventAor(jscm, this.Closed);
-    }
-
-    KGroup: string = "action";
-
-    KFlag: string = "flag";
-
-    KMsg: string = "msg";
-
-    KWhat: string = "what";
-
-    KAssign: string = 'cdata';
-
-    Listener: { [key: string]: JscInterface[]; } = {};
-    Callback: { [key: string]: JscInterface[]; } = {};
-    Assign: { [key: string]: JscInterface } = {};
-
-    AssignAppend(name, target, callback, isLoading?: boolean) {
-        var jscm: JscInterface = {
-            target: target,
-            always: false,
-            block: callback,
-            isLoading: isLoading
-        }
-
-        this.Assign[name] = jscm;
-
-    }
-
-    AssignRemove(name) {
-        delete this.Assign[name];
-    }
-
-    ListenerAor(action: string | number, target: any, callback?: (response: any, flag?: number, msg?: string) => void, always?: boolean, isLoading?: boolean): void {
-        if (!target) return;
-
-
-        var map = always ? this.Listener : this.Callback;
-
-        var jscList: JscInterface[];
-
-        if (!callback && map[action] === void 0) {
-            return;
-        }
-
-        if (map[action] === void 0) {
-            jscList = [];
-            map[action] = jscList;
-        } else {
-            jscList = map[action];
-        }
-
-
-        var jscm: JscInterface = {
-            target: target,
-            always: false,
-            block: callback,
-            isLoading: isLoading
-        }
-        this.EventAor(jscm, jscList);
-
-    }
-
-
-    removeAllListener(target?: any) {
-
-        if (target) {
-
-            this.__remove(target, this.Listener);
-            this.__remove(target, this.Callback);
-
-            return;
-        }
-
-
-        this.Listener = {}
-        this.Callback = {};
-    }
-
-    removeAllEvent(target?: any) {
-
-        if (target) {
-            this.__remove(target, this.Connected);
-            this.__remove(target, this.Closed);
-            this.__remove(target, this.Errored);
-            this.__remove(target, this.Handshaked);
-            return;
-        }
-
-        this.Connected = [];
-        this.Closed = [];
-        this.Errored = [];
-        this.Handshaked = [];
-    }
-
-    removeAll(target?: any) {
-        this.removeAllEvent(target);
-        this.removeAllListener(target);
-    }
-
-
-    private __remove(target, map) {
-        for (var x in map) {
-            let array = map[x];
-            var i = array.length;
-
-            while (i--) {
-                var jsc = array[i];
-                if (jsc.target == target) {
-                    array.splice(i, 1);
-                }
-            }
-        }
-    }
-
-
-
 }
 

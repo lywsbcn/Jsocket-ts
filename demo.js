@@ -4,13 +4,13 @@ window.onload = function () {
     var removeAll = document.getElementById("removeAll");
     var action = {
         add: function () {
-            Jsocket2.instance.addListener(1000, this, function () { });
+            Jsocket.instance.addListener(1000, this, function () { });
         },
         remove: function () {
-            Jsocket2.instance.removeListener(1000, this);
+            Jsocket.instance.removeListener(1000, this);
         },
         removeAll: function () {
-            Jsocket2.instance.removeAllListener();
+            Jsocket.instance.removeAllListener();
         },
         allfunction: function () {
         }

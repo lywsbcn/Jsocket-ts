@@ -9,14 +9,14 @@ window.onload = function () {
 
     var action = {
         add: function () {
-            Jsocket2.instance.addListener(1000, this, () => { })
+            Jsocket.instance.addListener(1000, this, () => { })
         },
         remove: function () {
-            Jsocket2.instance.removeListener(1000, this)
+            Jsocket.instance.removeListener(1000, this)
         },
 
         removeAll: function () {
-            Jsocket2.instance.removeAllListener()
+            Jsocket.instance.removeAllListener()
         }
 
         , allfunction: function () {
