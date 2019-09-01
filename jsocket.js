@@ -120,7 +120,7 @@ var Jsocket = /** @class */ (function () {
             }
             catch (e) {
                 _this.log.log("收到不是json的数据:" + evt.data);
-                _this.stopLoading();
+                _this.loading.stop();
                 return;
             }
             var action = data[_this.event.Kaction];
@@ -128,7 +128,7 @@ var Jsocket = /** @class */ (function () {
                 _this.log.log('收到消息 ' + evt.data);
             }
             if (action == 0)
-                _this.stopLoading();
+                _this.loading.stop();
             _this.record.addRecordResponse(action, data);
             var flag = data[_this.event.Kflag];
             var msg = data[_this.event.Kmsg];
@@ -138,7 +138,7 @@ var Jsocket = /** @class */ (function () {
                 if (!jsc)
                     return;
                 if (jsc.loading)
-                    _this.stopLoading();
+                    _this.loading.stop();
                 jsc.block(data, flag, msg, _this);
                 return;
             }
@@ -147,7 +147,7 @@ var Jsocket = /** @class */ (function () {
                 for (var i = 0; i < events.length; i++) {
                     var jsc = events[i];
                     if (jsc.loading)
-                        _this.stopLoading();
+                        _this.loading.stop();
                     jsc.block(data, flag, msg, _this);
                     events.splice(i, 1);
                     break;
@@ -325,6 +325,32 @@ var Jsocket = /** @class */ (function () {
                     clearTimeout(this.timer);
             }
         };
+        /*loading*/
+        this.loading = {
+            amount: 0,
+            timer: 0,
+            delay: 500,
+            start: function () {
+                if (window["Loading"]) {
+                    window['Loading'].start();
+                    return;
+                }
+                this.amount++;
+                document.body.appendChild(this.view);
+                clearTimeout(this.timer);
+            },
+            stop: function () {
+                var _this = this;
+                if (window["Loading"]) {
+                    window['Loading'].stop();
+                    return;
+                }
+                (--this.amount) <= 0 && (this.timer = setTimeout(function () {
+                    _this.amount <= 0 && _this.view.remove();
+                }, this.delay));
+            },
+            view: document.createElement('x-loading')
+        };
     }
     Object.defineProperty(Jsocket, "instance", {
         get: function () {
@@ -411,7 +437,7 @@ var Jsocket = /** @class */ (function () {
         if (this.ws && this.ws.readyState == WebSocket.OPEN) {
             this.ws.send(request);
         }
-        loading && this.startLoading();
+        loading && this.loading.start();
     };
     /**移除所有回调事件,所有监听事件 */
     Jsocket.prototype.removeAll = function (target) {
@@ -697,26 +723,6 @@ var Jsocket = /** @class */ (function () {
                 this.event.error.splice(i, 1);
             }
         }
-    };
-    Jsocket.prototype.startLoading = function () {
-        clearTimeout(this.loadingTimer);
-        if (document.querySelector(".jsocket_loading"))
-            return;
-        var div = document.createElement("div");
-        div.classList.add("jsocket_loading");
-        div.style.position = "fixed";
-        div.style.width = div.style.height = "100%";
-        div.style.background = 'url(jsframe/Ajax/images/loading.gif) no-repeat 50% 50%';
-        div.style.backgroundSize = "30px";
-        document.body.appendChild(div);
-        return div;
-    };
-    Jsocket.prototype.stopLoading = function () {
-        this.loadingTimer = setTimeout(function () {
-            var div = document.querySelector(".jsocket_loading");
-            if (div)
-                div.remove();
-        }, 500);
     };
     Jsocket.prototype.inArray = function (array, value) {
         for (var i = 0; i < array.length; i++) {

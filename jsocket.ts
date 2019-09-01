@@ -181,7 +181,7 @@
             data = JSON.parse(evt.data);
         } catch (e) {
             this.log.log("收到不是json的数据:" + evt.data);
-            this.stopLoading();
+            this.loading.stop();
             return;
         }
 
@@ -190,7 +190,7 @@
             this.log.log('收到消息 ' + evt.data);
         }
 
-        if (action == 0) this.stopLoading();
+        if (action == 0) this.loading.stop();
 
         this.record.addRecordResponse(action, data);
 
@@ -201,7 +201,7 @@
         if (assign) {
             let jsc = this.event.assign[assign];
             if (!jsc) return;
-            if (jsc.loading) this.stopLoading();
+            if (jsc.loading) this.loading.stop();
             jsc.block(data, flag, msg, this);
             return;
         }
@@ -210,7 +210,7 @@
         if (events) {
             for (var i = 0; i < events.length; i++) {
                 let jsc = events[i];
-                if (jsc.loading) this.stopLoading();
+                if (jsc.loading) this.loading.stop();
                 jsc.block(data, flag, msg, this);
                 events.splice(i, 1);
                 break;
@@ -257,7 +257,7 @@
             this.ws.send(request);
         }
 
-        loading && this.startLoading();
+        loading && this.loading.start();
 
     }
 
@@ -780,30 +780,34 @@
         }
     }
 
+    /*loading*/
+    private loading = {
+        amount: 0,
+        timer: 0,
+        delay: 500,
+        start: function () {
+            if (window["Loading"]) {
+                window['Loading'].start();
+                return;
+            }
 
-    private loadingTimer;
-    private startLoading() {
-        clearTimeout(this.loadingTimer);
-        if (document.querySelector(".jsocket_loading")) return;
+            this.amount++;
+            document.body.appendChild(this.view);
+            clearTimeout(this.timer);
+        },
+        stop: function() {
+            if (window["Loading"]) {
+                window['Loading'].stop();
+                return;
+            }
 
-        let div = document.createElement("div");
-        div.classList.add("jsocket_loading");
-        div.style.position = "fixed";
-        div.style.width = div.style.height = "100%";
-        div.style.background = 'url(jsframe/Ajax/images/loading.gif) no-repeat 50% 50%';
-        div.style.backgroundSize = "30px";
-
-        document.body.appendChild(div);
-
-        return div;
+            (--this.amount) <= 0 && (this.timer = setTimeout(() => {
+                this.amount <= 0 && this.view.remove();
+            }, this.delay))
+        },
+        view: document.createElement('x-loading')
     }
 
-    private stopLoading() {
-        this.loadingTimer = setTimeout(() => {
-            let div = document.querySelector(".jsocket_loading");
-            if (div) div.remove();
-        }, 500)
-    }
 
     private inArray(array: Array<any>, value: any): boolean {
         for (var i = 0; i < array.length; i++) {
